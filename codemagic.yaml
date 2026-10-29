@@ -56,6 +56,25 @@ workflows:
           cd "$CM_BUILD_DIR"
           npm run build
 
+      - name: Prepare iOS native tools
+        script: |
+          set -e
+          export HOMEBREW_NO_AUTO_UPDATE=1
+          export HOMEBREW_NO_INSTALL_CLEANUP=1
+
+          # Tauri's iOS init checks for libimobiledevice and may try to
+          # reinstall it. Codemagic images can already have ca-certificates
+          # linked, which makes that automatic reinstall fail.
+          if ! command -v idevice_id >/dev/null 2>&1; then
+            brew unlink ca-certificates || true
+            brew reinstall libimobiledevice || brew install libimobiledevice
+            brew link --overwrite --force ca-certificates || true
+          fi
+
+          command -v idevice_id
+          idevice_id --version || true
+          xcodegen --version || brew install xcodegen
+
       - name: Generate Tauri iOS project
         script: |
           set -e
@@ -63,9 +82,13 @@ workflows:
             source "$HOME/.cargo/env"
           fi
           export PATH="$HOME/.cargo/bin:$PATH"
+          export HOMEBREW_NO_AUTO_UPDATE=1
+          export HOMEBREW_NO_INSTALL_CLEANUP=1
           cd "$CM_BUILD_DIR"
           cargo --version
           rustc --version
+          command -v idevice_id
+          command -v xcodegen
           rm -rf src-tauri/gen/apple
           npx tauri ios init --ci
           test -d src-tauri/gen/apple
