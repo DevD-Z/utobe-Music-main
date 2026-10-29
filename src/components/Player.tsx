@@ -2,7 +2,7 @@ import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Repeat, Shuffle, ListMusic, Loader2, Wand2, Mic2 } from 'lucide-react';
 import { Track } from '../types/music';
 import { logger } from '../services/logger';
-import { isAndroidWebView, isNativeMobile, nativeAudio, nativeSourceFor } from '../services/nativeAudio';
+import { isAndroidWebView, isIOSWebView, isNativeMobile, nativeAudio, nativeSourceFor } from '../services/nativeAudio';
 import { publishAndroidMedia, setAndroidMediaCommandHandler, usesAndroidMediaBridge } from '../services/androidMedia';
 import { invoke } from '@tauri-apps/api/core';
 import { lavalinkService } from '../services/lavalink';
@@ -91,10 +91,20 @@ export const Player: React.FC<PlayerProps> = ({
   const [nativeStreamFailedFor, setNativeStreamFailedFor] = useState<string | null>(null);
   const [nativeStreamingDisabled, setNativeStreamingDisabled] = useState(false);
   const nativeFailureStreakRef = useRef(0);
+  const prewarmedNativeSourcesRef = useRef<Map<string, string>>(new Map());
+  const prewarmingTrackIdsRef = useRef<Set<string>>(new Set());
 
   const noteNativeFailure = useCallback((trackId: string | undefined) => {
     if (trackId) setNativeStreamFailedFor(trackId);
     nativeFailureStreakRef.current += 1;
+
+    // iOS background playback depends on AVPlayer. Never disable the native
+    // engine for the whole session because one bad YouTube extraction would
+    // force every later song back into WKWebView, which is exactly where audio
+    // becomes fragile when the device locks. The failed track may fall back,
+    // while the next track gets a fresh native attempt.
+    if (isIOSWebView()) return;
+
     if (nativeFailureStreakRef.current < NATIVE_FAILURE_LIMIT) return;
     setNativeStreamingDisabled((already) => {
       if (!already) {
@@ -163,6 +173,18 @@ export const Player: React.FC<PlayerProps> = ({
     if (!isNativeMobile() || !ytId || !currentTrack || nativeStreamingDisabled) return;
     let cancelled = false;
     const config = lavalinkService.getConfig();
+
+    // Auto Mix prewarms the next item while the current song is still playing.
+    // Reusing that already-resolved local stream avoids an extraction pause at
+    // the exact moment iOS advances tracks while the screen is locked.
+    const prewarmed = prewarmedNativeSourcesRef.current.get(currentTrack.identifier);
+    if (prewarmed) {
+      prewarmedNativeSourcesRef.current.delete(currentTrack.identifier);
+      setCachedNativeSource({ trackId: currentTrack.identifier, source: prewarmed });
+      setNativeStreamFailedFor((failed) => failed === currentTrack.identifier ? null : failed);
+      return;
+    }
+
     // Stop the previous native item immediately. Waiting for the next stream
     // download made the old song continue and made track selection look stuck.
     void nativeAudio.pause().catch(() => undefined);
@@ -175,7 +197,10 @@ export const Player: React.FC<PlayerProps> = ({
       baseUrl: getLavalinkBaseUrl(config),
       password: config.password,
     }).then((source) => {
-      if (!cancelled) setCachedNativeSource({ trackId: currentTrack.identifier, source });
+      if (!cancelled) {
+        setNativeStreamFailedFor((failed) => failed === currentTrack.identifier ? null : failed);
+        setCachedNativeSource({ trackId: currentTrack.identifier, source });
+      }
     }).catch((error) => {
       if (cancelled) return;
       logger.addLog('warn', 'Player', `Native YouTube stream unavailable: ${String(error)}`);
@@ -183,6 +208,40 @@ export const Player: React.FC<PlayerProps> = ({
     });
     return () => { cancelled = true; };
   }, [currentTrack?.identifier, ytId, nativeStreamingDisabled]);
+
+  // Resolve the next queued YouTube track ahead of time. This is especially
+  // important on iOS: AVPlayer can continue while WKWebView is suspended, but
+  // the JS thread may get only a short execution window after a track ends.
+  useEffect(() => {
+    if (!isNativeMobile() || nativeStreamingDisabled) return;
+    const nextTrack = queue[0];
+    if (!nextTrack || nextTrack.identifier === currentTrack?.identifier) return;
+    if (prewarmedNativeSourcesRef.current.has(nextTrack.identifier)) return;
+    if (prewarmingTrackIdsRef.current.has(nextTrack.identifier)) return;
+
+    const nextYtId = getYouTubeId(nextTrack);
+    if (!nextYtId) return;
+
+    const config = lavalinkService.getConfig();
+    prewarmingTrackIdsRef.current.add(nextTrack.identifier);
+    void invoke<string>('prepare_lavalink_stream', {
+      videoId: nextYtId,
+      baseUrl: getLavalinkBaseUrl(config),
+      password: config.password,
+    }).then((source) => {
+      prewarmedNativeSourcesRef.current.set(nextTrack.identifier, source);
+      // Keep memory bounded even when Auto Mix replaces the queue repeatedly.
+      while (prewarmedNativeSourcesRef.current.size > 3) {
+        const oldest = prewarmedNativeSourcesRef.current.keys().next().value as string | undefined;
+        if (!oldest) break;
+        prewarmedNativeSourcesRef.current.delete(oldest);
+      }
+    }).catch((error) => {
+      logger.addLog('info', 'Player', `Next-track prewarm skipped: ${String(error)}`);
+    }).finally(() => {
+      prewarmingTrackIdsRef.current.delete(nextTrack.identifier);
+    });
+  }, [queue[0]?.identifier, currentTrack?.identifier, nativeStreamingDisabled, getYouTubeId]);
 
   // Load the YouTube IFrame API and build the player exactly once. The API owns
   // its iframe from here on and every song switch goes through loadVideoById.
@@ -239,7 +298,8 @@ export const Player: React.FC<PlayerProps> = ({
                   backgroundResumesRef.current = 0;
                 }
                 if (
-                  isPlayingRef.current
+                  isAndroidWebView()
+                  && isPlayingRef.current
                   && !nativeSrcRef.current
                   && backgroundResumesRef.current < MAX_BACKGROUND_RESUMES
                 ) {
