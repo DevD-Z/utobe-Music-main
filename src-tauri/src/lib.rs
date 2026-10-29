@@ -79,7 +79,7 @@ struct StreamProxyState {
 
 #[derive(Clone, Default)]
 struct AudioProxyState {
-    inner: Option<StreamProxyState>,
+    inner: Arc<RwLock<Option<StreamProxyState>>>,
 }
 
 async fn proxy_stream(
@@ -250,8 +250,19 @@ async fn prepare_lavalink_stream(
     base_url: String,
     password: String,
 ) -> Result<String, String> {
-    let state = state.inner.as_ref()
-        .ok_or_else(|| "Native audio proxy is unavailable on this device; using web playback fallback".to_string())?;
+    // Lazily create the loopback proxy on first playback instead of during app
+    // startup. This keeps iOS launch free of socket/runtime work and prevents an
+    // audio infrastructure failure from taking down the whole application.
+    let proxy = if let Some(existing) = state.inner.read().await.clone() {
+        existing
+    } else {
+        let created = start_stream_proxy()?;
+        let mut slot = state.inner.write().await;
+        if slot.is_none() {
+            *slot = Some(created.clone());
+        }
+        slot.clone().unwrap_or(created)
+    };
     if video_id.len() != 11 || !video_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
         return Err("Invalid YouTube video ID".into());
     }
@@ -264,20 +275,20 @@ async fn prepare_lavalink_stream(
     // Settle on a working client before handing out a URL. Returning one blindly
     // meant a node that cannot extract this video still looked playable, and the
     // player only found out when media3 timed out ~19s later.
-    let resolved_client = resolve_stream_client(&state.http, &base_url, &video_id, &password)
+    let resolved_client = resolve_stream_client(&proxy.http, &base_url, &video_id, &password)
         .await
         .ok_or_else(|| {
             format!("The Lavalink node cannot extract audio for {video_id} with any YouTube client")
         })?;
 
-    let token = format!("{}-{}", video_id, state.next_id.fetch_add(1, Ordering::Relaxed));
-    state.targets.write().await.insert(token.clone(), StreamTarget {
+    let token = format!("{}-{}", video_id, proxy.next_id.fetch_add(1, Ordering::Relaxed));
+    proxy.targets.write().await.insert(token.clone(), StreamTarget {
         base_url,
         video_id,
         password,
         resolved_client: Some(resolved_client.to_string()),
     });
-    Ok(format!("http://127.0.0.1:{}/stream/{token}", state.port))
+    Ok(format!("http://127.0.0.1:{}/stream/{token}", proxy.port))
 }
 
 #[cfg(desktop)]
@@ -380,22 +391,8 @@ fn discord_clear_activity(state: tauri::State<'_, DiscordState>) -> Result<(), S
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Never let the optional local streaming proxy crash the whole mobile app.
-    // Some iOS environments can temporarily deny/break loopback setup during
-    // process startup. The UI and WebView player must still be allowed to open.
-    let stream_proxy = match start_stream_proxy() {
-        Ok(proxy) => {
-            eprintln!("audio proxy ready on 127.0.0.1:{}", proxy.port);
-            AudioProxyState { inner: Some(proxy) }
-        }
-        Err(error) => {
-            eprintln!("audio proxy unavailable at startup: {error}");
-            AudioProxyState::default()
-        }
-    };
-
     let builder = tauri::Builder::default()
-        .manage(stream_proxy)
+        .manage(AudioProxyState::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_native_audio::init());
