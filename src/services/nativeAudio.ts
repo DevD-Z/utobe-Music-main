@@ -39,6 +39,11 @@ const youtubeUrl = /(?:youtube\.com|youtube-nocookie\.com|youtu\.be)/i;
 export const isAndroidWebView = (): boolean =>
   isTauriRuntime() && /android/i.test(navigator.userAgent);
 
+/** iOS/iPadOS WKWebView runtime inside the Tauri app. */
+export const isIOSWebView = (): boolean =>
+  isTauriRuntime()
+  && (/iphone|ipad|ipod/i.test(navigator.userAgent) || isIpadOs());
+
 export function nativeSourceFor(track: Track | null): string | null {
   if (!isNativeMobile() || !track) return null;
   const source = track.playbackUrl || track.uri;
