@@ -118,7 +118,19 @@ workflows:
           rm -rf src-tauri/gen/apple
           npx tauri ios init --ci
           test -d src-tauri/gen/apple
+
+          # tauri-plugin-native-audio uses Swift on iOS. Its documentation
+          # explicitly requires /usr/lib/swift in LD_RUNPATH_SEARCH_PATHS for
+          # iOS 14-compatible targets to avoid launch-time crashes.
+          PROJECT_YML="$CM_BUILD_DIR/src-tauri/gen/apple/project.yml"
+          if [ -f "$PROJECT_YML" ]; then
+            python3 -c 'from pathlib import Path; p=Path("'"$PROJECT_YML"'"); lines=p.read_text().splitlines(); out=[]; added=False; [None for line in lines for _ in [out.append(line)] if not (("@executable_path/Frameworks" in line) and (out.append(line[:len(line)-len(line.lstrip())] + "- \"/usr/lib/swift\"") or True) and not (added:=True))]; p.write_text("\n".join(out)+"\n")' || true
+          fi
+
           find src-tauri/gen/apple -maxdepth 2 -type d -name "*.xcodeproj" -print
+          if [ -f "$PROJECT_YML" ]; then
+            grep -n -A4 -B2 "LD_RUNPATH_SEARCH_PATHS" "$PROJECT_YML" || true
+          fi
 
       - name: Build unsigned iOS app with Tauri
         script: |
