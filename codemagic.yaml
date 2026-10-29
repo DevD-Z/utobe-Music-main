@@ -84,14 +84,7 @@ workflows:
             XCODE_LIST="$(xcodebuild -list -json -project "$PROJECT")"
           fi
 
-          SCHEME="$(printf '%s' "$XCODE_LIST" | python3 -c '
-import json, sys
-data = json.load(sys.stdin)
-container = data.get("workspace") or data.get("project") or {}
-schemes = container.get("schemes") or []
-preferred = [s for s in schemes if s.endswith("_iOS")]
-print((preferred or schemes or [""])[0])
-')"
+          SCHEME="$(printf '%s' "$XCODE_LIST" | python3 -c 'import json,sys; d=json.load(sys.stdin); c=d.get("workspace") or d.get("project") or {}; s=c.get("schemes") or []; p=[x for x in s if x.endswith("_iOS")]; print((p or s or [""])[0])')"
 
           if [ -z "$SCHEME" ]; then
             echo "ERROR: Could not discover an iOS Xcode scheme."
