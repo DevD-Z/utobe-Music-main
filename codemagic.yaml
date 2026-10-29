@@ -94,7 +94,6 @@ workflows:
 
           echo "Resolved native iOS tools:"
           command -v idevicesyslog
-          command -v idevicesyslog
           command -v idevice_id
           command -v xcodegen
           command -v pod
@@ -113,6 +112,7 @@ workflows:
           cd "$CM_BUILD_DIR"
           cargo --version
           rustc --version
+          command -v idevicesyslog
           command -v idevice_id
           command -v xcodegen
           rm -rf src-tauri/gen/apple
