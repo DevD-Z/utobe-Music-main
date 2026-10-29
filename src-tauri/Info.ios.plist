@@ -8,5 +8,12 @@
   </array>
   <key>ITSAppUsesNonExemptEncryption</key>
   <false/>
+  <!-- AVPlayer receives a loopback URL from the Rust stream proxy. Keep ATS
+       strict for the internet while explicitly allowing local networking. -->
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsLocalNetworking</key>
+    <true/>
+  </dict>
 </dict>
 </plist>
