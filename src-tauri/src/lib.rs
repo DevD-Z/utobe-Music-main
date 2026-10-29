@@ -35,7 +35,7 @@ const CLIENT_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// Tokens are kept around after the next song is prepared so range requests the
 /// player still has in flight for the current song keep resolving.
-const MAX_TRACKED_STREAMS: usize = 8;
+const MAX_TRACKED_STREAMS: usize = 16;
 
 #[derive(Clone)]
 struct StreamTarget {
@@ -145,8 +145,13 @@ fn start_stream_proxy() -> Result<StreamProxyState, String> {
     let port = listener.local_addr()
         .map_err(|error| format!("Cannot read audio proxy address: {error}"))?.port();
     let http = reqwest::Client::builder()
-        .pool_idle_timeout(Duration::from_secs(90))
-        .pool_max_idle_per_host(8)
+        // Keep the Lavalink TLS connection hot across screen-lock periods and
+        // prewarmed track transitions. Reconnecting during a range request is
+        // audible on mobile networks, especially when iOS has just suspended
+        // the WebView and AVPlayer is the only component still running.
+        .connect_timeout(Duration::from_secs(6))
+        .pool_idle_timeout(Duration::from_secs(5 * 60))
+        .pool_max_idle_per_host(16)
         .tcp_keepalive(Duration::from_secs(30))
         .build()
         .map_err(|error| format!("Cannot build audio proxy client: {error}"))?;
