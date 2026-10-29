@@ -77,6 +77,11 @@ struct StreamProxyState {
     http: reqwest::Client,
 }
 
+#[derive(Clone, Default)]
+struct AudioProxyState {
+    inner: Option<StreamProxyState>,
+}
+
 async fn proxy_stream(
     State(state): State<StreamProxyState>,
     Path(token): Path<String>,
@@ -240,11 +245,13 @@ async fn resolve_stream_client(
 
 #[tauri::command]
 async fn prepare_lavalink_stream(
-    state: tauri::State<'_, StreamProxyState>,
+    state: tauri::State<'_, AudioProxyState>,
     video_id: String,
     base_url: String,
     password: String,
 ) -> Result<String, String> {
+    let state = state.inner.as_ref()
+        .ok_or_else(|| "Native audio proxy is unavailable on this device; using web playback fallback".to_string())?;
     if video_id.len() != 11 || !video_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
         return Err("Invalid YouTube video ID".into());
     }
@@ -373,7 +380,20 @@ fn discord_clear_activity(state: tauri::State<'_, DiscordState>) -> Result<(), S
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let stream_proxy = start_stream_proxy().expect("failed to start local audio proxy");
+    // Never let the optional local streaming proxy crash the whole mobile app.
+    // Some iOS environments can temporarily deny/break loopback setup during
+    // process startup. The UI and WebView player must still be allowed to open.
+    let stream_proxy = match start_stream_proxy() {
+        Ok(proxy) => {
+            eprintln!("audio proxy ready on 127.0.0.1:{}", proxy.port);
+            AudioProxyState { inner: Some(proxy) }
+        }
+        Err(error) => {
+            eprintln!("audio proxy unavailable at startup: {error}");
+            AudioProxyState::default()
+        }
+    };
+
     let builder = tauri::Builder::default()
         .manage(stream_proxy)
         .plugin(tauri_plugin_opener::init())
@@ -393,6 +413,7 @@ pub fn run() {
         ;
     #[cfg(mobile)]
     let builder = builder.invoke_handler(tauri::generate_handler![prepare_lavalink_stream]);
-    builder.run(tauri::generate_context!())
-        .expect("error while running hotdogdot");
+    if let Err(error) = builder.run(tauri::generate_context!()) {
+        eprintln!("hotdogdot runtime exited with error: {error}");
+    }
 }
