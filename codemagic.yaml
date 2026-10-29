@@ -1,0 +1,166 @@
+workflows:
+  ios-unsigned:
+    name: hotdogdot iOS - Unsigned IPA
+    instance_type: mac_mini_m2
+    max_build_duration: 90
+
+    environment:
+      node: 22.14.0
+      xcode: latest
+      cocoapods: default
+      vars:
+        APP_NAME: "hotdogdot"
+
+    cache:
+      cache_paths:
+        - ~/.npm
+        - ~/.cargo/registry
+        - ~/.cargo/git
+        - src-tauri/target
+
+    scripts:
+      - name: Show build environment
+        script: |
+          set -e
+          node --version
+          npm --version
+          xcodebuild -version
+          pod --version || true
+
+      - name: Install JavaScript dependencies
+        script: |
+          set -e
+          cd "$CM_BUILD_DIR"
+          npm ci
+
+      - name: Install Rust iOS target
+        script: |
+          set -e
+          if [ -f "$HOME/.cargo/env" ]; then
+            source "$HOME/.cargo/env"
+          fi
+
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+            source "$HOME/.cargo/env"
+          fi
+
+          rustup default stable
+          rustup target add aarch64-apple-ios
+          rustc --version
+          cargo --version
+
+      - name: Typecheck and build frontend
+        script: |
+          set -e
+          cd "$CM_BUILD_DIR"
+          npm run build
+
+      - name: Generate Tauri iOS project
+        script: |
+          set -e
+          cd "$CM_BUILD_DIR"
+          rm -rf src-tauri/gen/apple
+          npx tauri ios init --ci
+          test -d src-tauri/gen/apple
+          find src-tauri/gen/apple -maxdepth 2 -type d -name "*.xcodeproj" -print
+
+      - name: Build iPhone app without code signing
+        script: |
+          set -euo pipefail
+          cd "$CM_BUILD_DIR/src-tauri/gen/apple"
+
+          PROJECT="$(find . -maxdepth 2 -type d -name '*.xcodeproj' -print -quit)"
+          WORKSPACE="$(find . -maxdepth 4 -type d -name '*.xcworkspace' -print -quit)"
+
+          if [ -z "$PROJECT" ]; then
+            echo "ERROR: Tauri did not generate an Xcode project."
+            exit 1
+          fi
+
+          if [ -n "$WORKSPACE" ]; then
+            XCODE_LIST="$(xcodebuild -list -json -workspace "$WORKSPACE")"
+          else
+            XCODE_LIST="$(xcodebuild -list -json -project "$PROJECT")"
+          fi
+
+          SCHEME="$(printf '%s' "$XCODE_LIST" | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+container = data.get("workspace") or data.get("project") or {}
+schemes = container.get("schemes") or []
+preferred = [s for s in schemes if s.endswith("_iOS")]
+print((preferred or schemes or [""])[0])
+')"
+
+          if [ -z "$SCHEME" ]; then
+            echo "ERROR: Could not discover an iOS Xcode scheme."
+            echo "$XCODE_LIST"
+            exit 1
+          fi
+
+          echo "Project: $PROJECT"
+          echo "Workspace: ${WORKSPACE:-<none>}"
+          echo "Scheme: $SCHEME"
+
+          DERIVED="$CM_BUILD_DIR/build/ios-derived"
+          LOG_DIR="/tmp/xcodebuild_logs"
+          mkdir -p "$DERIVED" "$LOG_DIR"
+
+          if [ -n "$WORKSPACE" ]; then
+            xcodebuild \
+              -workspace "$WORKSPACE" \
+              -scheme "$SCHEME" \
+              -configuration Release \
+              -sdk iphoneos \
+              -destination "generic/platform=iOS" \
+              -derivedDataPath "$DERIVED" \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY="" \
+              build | tee "$LOG_DIR/ios-build.log"
+          else
+            xcodebuild \
+              -project "$PROJECT" \
+              -scheme "$SCHEME" \
+              -configuration Release \
+              -sdk iphoneos \
+              -destination "generic/platform=iOS" \
+              -derivedDataPath "$DERIVED" \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY="" \
+              build | tee "$LOG_DIR/ios-build.log"
+          fi
+
+      - name: Package unsigned IPA
+        script: |
+          set -euo pipefail
+          cd "$CM_BUILD_DIR"
+
+          PRODUCTS="$CM_BUILD_DIR/build/ios-derived/Build/Products/Release-iphoneos"
+          APP_PATH="$(find "$PRODUCTS" -maxdepth 1 -type d -name '*.app' -print -quit)"
+
+          if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
+            echo "ERROR: Release iPhone .app was not produced."
+            find "$CM_BUILD_DIR/build/ios-derived/Build/Products" -maxdepth 3 -type d -name '*.app' -print || true
+            exit 1
+          fi
+
+          IPA_DIR="$CM_BUILD_DIR/build/ios/ipa"
+          PAYLOAD_DIR="$IPA_DIR/Payload"
+          rm -rf "$IPA_DIR"
+          mkdir -p "$PAYLOAD_DIR"
+
+          cp -R "$APP_PATH" "$PAYLOAD_DIR/"
+          cd "$IPA_DIR"
+          /usr/bin/zip -qry "$APP_NAME-unsigned.ipa" Payload
+          rm -rf Payload
+
+          echo "Created unsigned IPA:"
+          ls -lh "$IPA_DIR/$APP_NAME-unsigned.ipa"
+
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - build/ios-derived/Build/Products/Release-iphoneos/*.app
+      - /tmp/xcodebuild_logs/*.log
