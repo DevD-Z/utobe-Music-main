@@ -5,8 +5,8 @@ workflows:
     max_build_duration: 90
 
     environment:
-      node: 22.14.0
-      xcode: latest
+      node: 24.15.0
+      xcode: 26.4
       cocoapods: default
       vars:
         APP_NAME: "hotdogdot"
@@ -46,7 +46,7 @@ workflows:
           fi
 
           rustup default stable
-          rustup target add aarch64-apple-ios
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
           rustc --version
           cargo --version
 
@@ -61,19 +61,45 @@ workflows:
           set -e
           export HOMEBREW_NO_AUTO_UPDATE=1
           export HOMEBREW_NO_INSTALL_CLEANUP=1
+          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
-          # Tauri's iOS init checks for libimobiledevice and may try to
-          # reinstall it. Codemagic images can already have ca-certificates
-          # linked, which makes that automatic reinstall fail.
-          if ! command -v idevice_id >/dev/null 2>&1; then
-            brew unlink ca-certificates || true
-            brew reinstall libimobiledevice || brew install libimobiledevice
-            brew link --overwrite --force ca-certificates || true
+          # cargo-mobile/Tauri checks for idevicesyslog when detecting
+          # libimobiledevice. Codemagic can already have the formula installed
+          # but not linked, so relink first instead of doing a costly reinstall.
+          if ! command -v idevicesyslog >/dev/null 2>&1; then
+            if brew list --versions libimobiledevice >/dev/null 2>&1; then
+              brew link --overwrite --force libimobiledevice || true
+              hash -r
+            fi
           fi
 
+          if ! command -v idevicesyslog >/dev/null 2>&1; then
+            brew install libimobiledevice
+            brew link --overwrite --force libimobiledevice || true
+            hash -r
+          fi
+
+          # Same strategy for XcodeGen: use the existing Cellar install first.
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            if brew list --versions xcodegen >/dev/null 2>&1; then
+              brew link --overwrite --force xcodegen || true
+              hash -r
+            fi
+          fi
+
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+            hash -r
+          fi
+
+          echo "Resolved native iOS tools:"
+          command -v idevicesyslog
+          command -v idevicesyslog
           command -v idevice_id
-          idevice_id --version || true
-          xcodegen --version || brew install xcodegen
+          command -v xcodegen
+          command -v pod
+          xcodegen --version
+          pod --version
 
       - name: Generate Tauri iOS project
         script: |
