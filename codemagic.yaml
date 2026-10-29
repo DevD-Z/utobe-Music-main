@@ -124,7 +124,85 @@ workflows:
           # iOS 14-compatible targets to avoid launch-time crashes.
           PROJECT_YML="$CM_BUILD_DIR/src-tauri/gen/apple/project.yml"
           if [ -f "$PROJECT_YML" ]; then
-            python3 -c 'from pathlib import Path; p=Path("'"$PROJECT_YML"'"); lines=p.read_text().splitlines(); out=[]; added=False; [None for line in lines for _ in [out.append(line)] if not (("@executable_path/Frameworks" in line) and (out.append(line[:len(line)-len(line.lstrip())] + "- \"/usr/lib/swift\"") or True) and not (added:=True))]; p.write_text("\n".join(out)+"\n")' || true
+            python3 -c "from pathlib import Path; import re; p=Path(r'$PROJECT_YML'); s=p.read_text(); s=s if '/usr/lib/swift' in s else re.sub(r'(?m)^(\\s*)-\\s*\"?@executable_path/Frameworks\"?\\s*
+
+          find src-tauri/gen/apple -maxdepth 2 -type d -name "*.xcodeproj" -print
+          if [ -f "$PROJECT_YML" ]; then
+            grep -n -A4 -B2 "LD_RUNPATH_SEARCH_PATHS" "$PROJECT_YML" || true
+          fi
+
+      - name: Build unsigned iOS app with Tauri
+        script: |
+          set -euo pipefail
+          if [ -f "$HOME/.cargo/env" ]; then
+            source "$HOME/.cargo/env"
+          fi
+          export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+          export CI=true
+          export HOMEBREW_NO_AUTO_UPDATE=1
+          export HOMEBREW_NO_INSTALL_CLEANUP=1
+
+          cd "$CM_BUILD_DIR"
+
+          # IMPORTANT: do not call xcodebuild directly here.
+          # The generated Xcode build phase calls `tauri ios xcode-script`
+          # and expects a temporary server-addr file created by the parent
+          # Tauri CLI process. Direct xcodebuild skips that setup.
+          npx tauri ios build --ci --target aarch64 --no-sign -v
+
+      - name: Collect unsigned IPA
+        script: |
+          set -euo pipefail
+          cd "$CM_BUILD_DIR"
+
+          IPA_DIR="$CM_BUILD_DIR/build/ios/ipa"
+          mkdir -p "$IPA_DIR"
+
+          FOUND_IPA="$(find "$CM_BUILD_DIR/src-tauri/gen/apple" -type f -name '*.ipa' -print -quit || true)"
+
+          if [ -n "$FOUND_IPA" ] && [ -f "$FOUND_IPA" ]; then
+            cp "$FOUND_IPA" "$IPA_DIR/$APP_NAME-unsigned.ipa"
+          else
+            echo "Tauri did not expose an IPA directly; looking for the built device app."
+            APP_PATH="$(find "$CM_BUILD_DIR/src-tauri/gen/apple" "$CM_BUILD_DIR/src-tauri/target" \
+              -type d -name '*.app' -path '*iphoneos*' -print -quit 2>/dev/null || true)"
+
+            if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
+              APP_PATH="$(find "$CM_BUILD_DIR/src-tauri/gen/apple" \
+                -type d -name '*.app' -print -quit 2>/dev/null || true)"
+            fi
+
+            if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
+              echo "ERROR: No unsigned IPA or iPhone .app was produced."
+              echo "Available Apple build outputs:"
+              find "$CM_BUILD_DIR/src-tauri/gen/apple" -maxdepth 6 \
+                \( -name '*.ipa' -o -name '*.app' -o -name '*.xcarchive' \) -print || true
+              exit 1
+            fi
+
+            TMP_PAYLOAD="$IPA_DIR/Payload"
+            rm -rf "$TMP_PAYLOAD"
+            mkdir -p "$TMP_PAYLOAD"
+            cp -R "$APP_PATH" "$TMP_PAYLOAD/"
+            (
+              cd "$IPA_DIR"
+              /usr/bin/zip -qry "$APP_NAME-unsigned.ipa" Payload
+            )
+            rm -rf "$TMP_PAYLOAD"
+          fi
+
+          echo "Unsigned IPA ready:"
+          ls -lh "$IPA_DIR/$APP_NAME-unsigned.ipa"
+
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - src-tauri/gen/apple/**/*.xcarchive
+      - src-tauri/gen/apple/**/*.app
+, lambda m: m.group(0)+'\\n'+m.group(1)+'- \"/usr/lib/swift\"', s, count=1); p.write_text(s)"
+            grep -q "/usr/lib/swift" "$PROJECT_YML" || {
+              echo "ERROR: Failed to add /usr/lib/swift to LD_RUNPATH_SEARCH_PATHS"
+              exit 1
+            }
           fi
 
           find src-tauri/gen/apple -maxdepth 2 -type d -name "*.xcodeproj" -print
