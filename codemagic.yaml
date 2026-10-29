@@ -120,99 +120,70 @@ workflows:
           test -d src-tauri/gen/apple
           find src-tauri/gen/apple -maxdepth 2 -type d -name "*.xcodeproj" -print
 
-      - name: Build iPhone app without code signing
+      - name: Build unsigned iOS app with Tauri
         script: |
           set -euo pipefail
           if [ -f "$HOME/.cargo/env" ]; then
             source "$HOME/.cargo/env"
           fi
-          export PATH="$HOME/.cargo/bin:$PATH"
-          cd "$CM_BUILD_DIR/src-tauri/gen/apple"
+          export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+          export CI=true
+          export HOMEBREW_NO_AUTO_UPDATE=1
+          export HOMEBREW_NO_INSTALL_CLEANUP=1
 
-          PROJECT="$(find . -maxdepth 2 -type d -name '*.xcodeproj' -print -quit)"
-          WORKSPACE="$(find . -maxdepth 4 -type d -name '*.xcworkspace' -print -quit)"
+          cd "$CM_BUILD_DIR"
 
-          if [ -z "$PROJECT" ]; then
-            echo "ERROR: Tauri did not generate an Xcode project."
-            exit 1
-          fi
+          # IMPORTANT: do not call xcodebuild directly here.
+          # The generated Xcode build phase calls `tauri ios xcode-script`
+          # and expects a temporary server-addr file created by the parent
+          # Tauri CLI process. Direct xcodebuild skips that setup.
+          npx tauri ios build --ci --target aarch64 --no-sign -v
 
-          if [ -n "$WORKSPACE" ]; then
-            XCODE_LIST="$(xcodebuild -list -json -workspace "$WORKSPACE")"
-          else
-            XCODE_LIST="$(xcodebuild -list -json -project "$PROJECT")"
-          fi
-
-          SCHEME="$(printf '%s' "$XCODE_LIST" | python3 -c 'import json,sys; d=json.load(sys.stdin); c=d.get("workspace") or d.get("project") or {}; s=c.get("schemes") or []; p=[x for x in s if x.endswith("_iOS")]; print((p or s or [""])[0])')"
-
-          if [ -z "$SCHEME" ]; then
-            echo "ERROR: Could not discover an iOS Xcode scheme."
-            echo "$XCODE_LIST"
-            exit 1
-          fi
-
-          echo "Project: $PROJECT"
-          echo "Workspace: ${WORKSPACE:-<none>}"
-          echo "Scheme: $SCHEME"
-
-          DERIVED="$CM_BUILD_DIR/build/ios-derived"
-          LOG_DIR="/tmp/xcodebuild_logs"
-          mkdir -p "$DERIVED" "$LOG_DIR"
-
-          if [ -n "$WORKSPACE" ]; then
-            xcodebuild \
-              -workspace "$WORKSPACE" \
-              -scheme "$SCHEME" \
-              -configuration Release \
-              -sdk iphoneos \
-              -destination "generic/platform=iOS" \
-              -derivedDataPath "$DERIVED" \
-              CODE_SIGNING_ALLOWED=NO \
-              CODE_SIGNING_REQUIRED=NO \
-              CODE_SIGN_IDENTITY="" \
-              build | tee "$LOG_DIR/ios-build.log"
-          else
-            xcodebuild \
-              -project "$PROJECT" \
-              -scheme "$SCHEME" \
-              -configuration Release \
-              -sdk iphoneos \
-              -destination "generic/platform=iOS" \
-              -derivedDataPath "$DERIVED" \
-              CODE_SIGNING_ALLOWED=NO \
-              CODE_SIGNING_REQUIRED=NO \
-              CODE_SIGN_IDENTITY="" \
-              build | tee "$LOG_DIR/ios-build.log"
-          fi
-
-      - name: Package unsigned IPA
+      - name: Collect unsigned IPA
         script: |
           set -euo pipefail
           cd "$CM_BUILD_DIR"
 
-          PRODUCTS="$CM_BUILD_DIR/build/ios-derived/Build/Products/Release-iphoneos"
-          APP_PATH="$(find "$PRODUCTS" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          IPA_DIR="$CM_BUILD_DIR/build/ios/ipa"
+          mkdir -p "$IPA_DIR"
 
-          if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
-            echo "ERROR: Release iPhone .app was not produced."
-            find "$CM_BUILD_DIR/build/ios-derived/Build/Products" -maxdepth 3 -type d -name '*.app' -print || true
-            exit 1
+          FOUND_IPA="$(find "$CM_BUILD_DIR/src-tauri/gen/apple" -type f -name '*.ipa' -print -quit || true)"
+
+          if [ -n "$FOUND_IPA" ] && [ -f "$FOUND_IPA" ]; then
+            cp "$FOUND_IPA" "$IPA_DIR/$APP_NAME-unsigned.ipa"
+          else
+            echo "Tauri did not expose an IPA directly; looking for the built device app."
+            APP_PATH="$(find "$CM_BUILD_DIR/src-tauri/gen/apple" "$CM_BUILD_DIR/src-tauri/target" \
+              -type d -name '*.app' -path '*iphoneos*' -print -quit 2>/dev/null || true)"
+
+            if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
+              APP_PATH="$(find "$CM_BUILD_DIR/src-tauri/gen/apple" \
+                -type d -name '*.app' -print -quit 2>/dev/null || true)"
+            fi
+
+            if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
+              echo "ERROR: No unsigned IPA or iPhone .app was produced."
+              echo "Available Apple build outputs:"
+              find "$CM_BUILD_DIR/src-tauri/gen/apple" -maxdepth 6 \
+                \( -name '*.ipa' -o -name '*.app' -o -name '*.xcarchive' \) -print || true
+              exit 1
+            fi
+
+            TMP_PAYLOAD="$IPA_DIR/Payload"
+            rm -rf "$TMP_PAYLOAD"
+            mkdir -p "$TMP_PAYLOAD"
+            cp -R "$APP_PATH" "$TMP_PAYLOAD/"
+            (
+              cd "$IPA_DIR"
+              /usr/bin/zip -qry "$APP_NAME-unsigned.ipa" Payload
+            )
+            rm -rf "$TMP_PAYLOAD"
           fi
 
-          IPA_DIR="$CM_BUILD_DIR/build/ios/ipa"
-          PAYLOAD_DIR="$IPA_DIR/Payload"
-          rm -rf "$IPA_DIR"
-          mkdir -p "$PAYLOAD_DIR"
-
-          cp -R "$APP_PATH" "$PAYLOAD_DIR/"
-          cd "$IPA_DIR"
-          /usr/bin/zip -qry "$APP_NAME-unsigned.ipa" Payload
-          rm -rf Payload
-
-          echo "Created unsigned IPA:"
+          echo "Unsigned IPA ready:"
           ls -lh "$IPA_DIR/$APP_NAME-unsigned.ipa"
 
     artifacts:
       - build/ios/ipa/*.ipa
-      - build/ios-derived/Build/Products/Release-iphoneos/*.app
-      - /tmp/xcodebuild_logs/*.log
+      - src-tauri/gen/apple/**/*.xcarchive
+      - src-tauri/gen/apple/**/*.app
