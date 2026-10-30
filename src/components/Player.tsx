@@ -170,13 +170,17 @@ export const Player: React.FC<PlayerProps> = ({
   const nativeSrc = nativeSourceFor(nativeTrack);
   const nativeSrcRef = useRef<string | null>(nativeSrc);
   nativeSrcRef.current = nativeSrc;
-  const resolvingNativeStream = isNativeMobile() && Boolean(ytId) && !nativeSrc
+  // Render can return search metadata while YouTube blocks media extraction from
+  // its datacenter IP. On iOS, waiting for that failed native probe also expires
+  // the tap's user-activation window, so WKWebView rejects the iframe fallback.
+  // Start YouTube immediately there; direct URLs still use AVPlayer.
+  const resolvingNativeStream = isNativeMobile() && !isIOSWebView() && Boolean(ytId) && !nativeSrc
     && !nativeStreamingDisabled
     && nativeStreamFailedFor !== currentTrack?.identifier;
   const webYtId = nativeSrc || resolvingNativeStream ? null : ytId;
 
   useEffect(() => {
-    if (!isNativeMobile() || !ytId || !currentTrack || nativeStreamingDisabled) return;
+    if (!isNativeMobile() || isIOSWebView() || !ytId || !currentTrack || nativeStreamingDisabled) return;
     let cancelled = false;
     const config = lavalinkService.getConfig();
 
@@ -236,7 +240,7 @@ export const Player: React.FC<PlayerProps> = ({
   // important on iOS: AVPlayer can continue while WKWebView is suspended, but
   // the JS thread may get only a short execution window after a track ends.
   useEffect(() => {
-    if (!isNativeMobile() || nativeStreamingDisabled) return;
+    if (!isNativeMobile() || isIOSWebView() || nativeStreamingDisabled) return;
     const nextTrack = queue[0];
     if (!nextTrack || nextTrack.identifier === currentTrack?.identifier) return;
     if (prewarmedNativeSourcesRef.current.has(nextTrack.identifier)) return;
@@ -762,7 +766,8 @@ export const Player: React.FC<PlayerProps> = ({
           embed to reload between songs. */}
       <div
         aria-hidden="true"
-        className="fixed bottom-0 right-0 w-2 h-2 opacity-0 pointer-events-none z-[-1] overflow-hidden"
+        className="fixed w-[200px] h-[200px] opacity-[0.01] pointer-events-none overflow-hidden"
+        style={{ left: '-300px', top: 0 }}
       >
         <div ref={ytHostRef} id="yt-player-iframe-element" />
       </div>
