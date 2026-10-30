@@ -582,6 +582,16 @@ export const Player: React.FC<PlayerProps> = ({
     }
   }, [isPlaying, webYtId, nativeSrc]);
 
+  const handlePlayPauseClick = () => {
+    // Keep YouTube's play command inside the native tap. React state effects run
+    // after the event and iOS WKWebView may reject that delayed autoplay.
+    if (!nativeSrc && ytPlayerRef.current && webYtId) {
+      if (isPlayingRef.current) ytPlayerRef.current.pauseVideo?.();
+      else ytPlayerRef.current.playVideo?.();
+    }
+    onPlayPauseToggle();
+  };
+
   // Volume Change
   const handleVolumeChange = (newVol: number) => {
     setVolume(newVol);
@@ -851,7 +861,7 @@ export const Player: React.FC<PlayerProps> = ({
           </button>
 
           <button
-            onClick={onPlayPauseToggle}
+            onClick={handlePlayPauseClick}
             disabled={!currentTrack}
             className="w-10 h-10 rounded-full bg-sky-500 hover:bg-sky-400 text-slate-950 flex items-center justify-center shadow-lg shadow-sky-500/30 transition transform active:scale-90 disabled:opacity-40"
           >
