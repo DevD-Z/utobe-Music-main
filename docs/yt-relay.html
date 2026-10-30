@@ -1,0 +1,52 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>html,body,#p{margin:0;width:100%;height:100%;background:#000;overflow:hidden}</style>
+</head>
+<body>
+<div id="p"></div>
+<script>
+// YouTube rejects embeds without an HTTP Referer (error 153). The iOS app runs
+// from tauri://localhost, which WebKit never sends as a Referer, so the app
+// hosts the player here over HTTPS and drives it with postMessage.
+var player, ready = false, queued = [];
+function send(msg) { parent.postMessage(Object.assign({ source: 'hd-yt-relay' }, msg), '*'); }
+function run(m) {
+  if (!ready) { queued.push(m); return; }
+  if (m.cmd === 'load') player.loadVideoById({ videoId: m.id, startSeconds: m.start || 0 });
+  else if (m.cmd === 'cue') player.cueVideoById({ videoId: m.id, startSeconds: m.start || 0 });
+  else if (m.cmd === 'play') player.playVideo();
+  else if (m.cmd === 'pause') player.pauseVideo();
+  else if (m.cmd === 'seek') player.seekTo(m.time, true);
+  else if (m.cmd === 'volume') player.setVolume(m.value);
+  else if (m.cmd === 'mute') player.mute();
+  else if (m.cmd === 'unmute') player.unMute();
+}
+window.addEventListener('message', function (e) {
+  if (e.source !== parent || !e.data || e.data.target !== 'hd-yt-relay') return;
+  run(e.data);
+});
+function onYouTubeIframeAPIReady() {
+  player = new YT.Player('p', {
+    width: '100%', height: '100%',
+    playerVars: { autoplay: 1, playsinline: 1, controls: 0, disablekb: 1, fs: 0, rel: 0, iv_load_policy: 3 },
+    events: {
+      onReady: function () { ready = true; send({ event: 'ready' }); queued.splice(0).forEach(run); },
+      onStateChange: function (e) { send({ event: 'state', data: e.data }); },
+      onError: function (e) { send({ event: 'error', data: e.data }); }
+    }
+  });
+  setInterval(function () {
+    if (!ready || typeof player.getCurrentTime !== 'function') return;
+    send({ event: 'time', time: player.getCurrentTime() || 0, duration: player.getDuration() || 0, state: player.getPlayerState() });
+  }, 400);
+}
+var s = document.createElement('script');
+s.src = 'https://www.youtube.com/iframe_api';
+document.head.appendChild(s);
+</script>
+</body>
+</html>

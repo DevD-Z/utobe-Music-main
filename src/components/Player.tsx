@@ -52,6 +52,61 @@ const NATIVE_FAILURE_LIMIT = 2;
 const NATIVE_RESOLUTION_TIMEOUT_MS = 5000;
 
 /**
+ * YouTube refuses embeds that arrive without an HTTP Referer (error 153). iOS
+ * serves the app from tauri://localhost, which WebKit never sends as a Referer,
+ * so there the player lives in an HTTPS relay page and is driven by
+ * postMessage. Mirrors the subset of YT.Player this component calls.
+ */
+const YT_RELAY_URL = 'https://devd-z.github.io/utobe-Music-main/yt-relay.html';
+
+class RelayPlayer {
+  private frame: HTMLIFrameElement;
+  private time = 0;
+  private duration = 0;
+  private state = -1;
+
+  constructor(host: HTMLElement, options: { events: Record<string, (event: any) => void> }) {
+    this.frame = document.createElement('iframe');
+    this.frame.src = YT_RELAY_URL;
+    this.frame.width = '200';
+    this.frame.height = '200';
+    this.frame.allow = 'autoplay; encrypted-media; picture-in-picture';
+    host.replaceWith(this.frame);
+    window.addEventListener('message', (event) => {
+      const msg = event.data;
+      if (event.source !== this.frame.contentWindow || msg?.source !== 'hd-yt-relay') return;
+      if (msg.event === 'time') {
+        this.time = msg.time;
+        this.duration = msg.duration;
+        this.state = msg.state;
+      } else if (msg.event === 'ready') {
+        options.events.onReady?.({ target: this });
+      } else if (msg.event === 'state') {
+        this.state = msg.data;
+        options.events.onStateChange?.({ data: msg.data });
+      } else if (msg.event === 'error') {
+        options.events.onError?.({ data: msg.data });
+      }
+    });
+  }
+
+  private send(msg: Record<string, unknown>) {
+    this.frame.contentWindow?.postMessage({ target: 'hd-yt-relay', ...msg }, '*');
+  }
+
+  loadVideoById(arg: { videoId: string; startSeconds?: number }) { this.send({ cmd: 'load', id: arg.videoId, start: arg.startSeconds }); }
+  playVideo() { this.send({ cmd: 'play' }); }
+  pauseVideo() { this.send({ cmd: 'pause' }); }
+  seekTo(time: number) { this.time = time; this.send({ cmd: 'seek', time }); }
+  setVolume(value: number) { this.send({ cmd: 'volume', value }); }
+  mute() { this.send({ cmd: 'mute' }); }
+  unMute() { this.send({ cmd: 'unmute' }); }
+  getCurrentTime() { return this.time; }
+  getDuration() { return this.duration; }
+  getPlayerState() { return this.state; }
+}
+
+/**
  * How many consecutive times the embed may be nudged back into playing after it
  * pauses itself in the background. Bounded so a genuine pause — from the
  * notification, a phone call, another app taking audio focus — always wins, and
@@ -287,7 +342,8 @@ export const Player: React.FC<PlayerProps> = ({
     const createPlayerInstance = () => {
       if (disposed || ytPlayerRef.current || !ytHostRef.current) return;
       try {
-        ytPlayerRef.current = new window.YT.Player(ytHostRef.current, {
+        const Player = isIOSWebView() ? RelayPlayer : window.YT.Player;
+        ytPlayerRef.current = new Player(ytHostRef.current, {
           host: 'https://www.youtube-nocookie.com',
           width: '200',
           height: '200',
@@ -377,7 +433,7 @@ export const Player: React.FC<PlayerProps> = ({
       }
     };
 
-    if (window.YT && window.YT.Player) {
+    if (isIOSWebView() || (window.YT && window.YT.Player)) {
       createPlayerInstance();
     } else {
       const previousReady = window.onYouTubeIframeAPIReady;
