@@ -6,29 +6,73 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>html,body,#p{margin:0;width:100%;height:100%;background:#000;overflow:hidden}</style>
 <script>
-// Mock document.hidden and visibilityState before YouTube scripts load.
-// When iOS locks the screen, YouTube's player checks these properties and
-// automatically calls pauseVideo() if it detects the page is hidden.
-try {
-  Object.defineProperty(document, 'hidden', { get: function() { return false; }, configurable: true });
-  Object.defineProperty(document, 'visibilityState', { get: function() { return 'visible'; }, configurable: true });
-  Object.defineProperty(document, 'webkitHidden', { get: function() { return false; }, configurable: true });
-  Object.defineProperty(document, 'webkitVisibilityState', { get: function() { return 'visible'; }, configurable: true });
-} catch(e) {}
+// Background video playback support for iOS WebKit (adapted from Brave & Mozilla video-bg-play)
+(function() {
+  'use strict';
+  try {
+    Object.defineProperty(Document.prototype, 'hidden', { get: function() { return false; }, configurable: true });
+    Object.defineProperty(Document.prototype, 'visibilityState', { get: function() { return 'visible'; }, configurable: true });
+    Object.defineProperty(Document.prototype, 'onvisibilitychange', { get: function() { return null; }, set: function() {}, configurable: true });
+  } catch(e) {}
 
-// Stop visibilitychange events from reaching YouTube's internal listeners
-['visibilitychange', 'webkitvisibilitychange', 'pagehide', 'blur'].forEach(function(evt) {
-  window.addEventListener(evt, function(e) { e.stopImmediatePropagation(); }, true);
-  document.addEventListener(evt, function(e) { e.stopImmediatePropagation(); }, true);
-});
+  var nativePlay = null, pauseRequested = false;
+  try {
+    if (window.HTMLMediaElement && HTMLMediaElement.prototype) {
+      nativePlay = HTMLMediaElement.prototype.play;
+      var nativePause = HTMLMediaElement.prototype.pause;
+      HTMLMediaElement.prototype.pause = function() {
+        pauseRequested = true;
+        return nativePause.apply(this, arguments);
+      };
+      HTMLMediaElement.prototype.play = function() {
+        pauseRequested = false;
+        return nativePlay.apply(this, arguments);
+      };
+    }
+  } catch(e) {}
+
+  var nativeVisGet = null;
+  try {
+    var desc = Object.getOwnPropertyDescriptor(Document.prototype, 'visibilityState');
+    if (desc && desc.get) nativeVisGet = desc.get;
+  } catch(e) {}
+  function realVis() {
+    try { if (nativeVisGet) return nativeVisGet.call(document); } catch(e) {}
+    return 'visible';
+  }
+
+  var REPLAY_MS = 2500, lastHidden = -REPLAY_MS, lastVisible = -REPLAY_MS;
+  document.addEventListener('visibilitychange', function() {
+    if (realVis() === 'hidden') lastHidden = Date.now(); else lastVisible = Date.now();
+  }, true);
+
+  function replay(v) {
+    try {
+      var r = nativePlay ? nativePlay.call(v) : v.play();
+      if (r && typeof r.catch === 'function') r.catch(function() {});
+    } catch(e) {}
+  }
+
+  document.addEventListener('pause', function(e) {
+    var v = e.target;
+    if (!v || !v.tagName || (v.tagName !== 'VIDEO' && v.tagName !== 'AUDIO')) return;
+    if (pauseRequested || v.ended) return;
+    var now = Date.now();
+    if (realVis() === 'hidden') {
+      if (now - lastHidden < REPLAY_MS) replay(v);
+      return;
+    }
+    if (now - lastVisible < REPLAY_MS) {
+      replay(v);
+      return;
+    }
+  }, true);
+})();
 </script>
 </head>
 <body>
 <div id="p"></div>
 <script>
-// YouTube rejects embeds without an HTTP Referer (error 153). The iOS app runs
-// from tauri://localhost, which WebKit never sends as a Referer, so the app
-// hosts the player here over HTTPS and drives it with postMessage.
 var player, ready = false, queued = [];
 var isIntentionallyPlaying = false;
 
@@ -83,8 +127,6 @@ function onYouTubeIframeAPIReady() {
         queued.splice(0).forEach(run);
       },
       onStateChange: function (e) {
-        // If YouTube paused itself (e.g. screen lock or background transition)
-        // while the user intentionally wants playback, nudge it back immediately.
         if (e.data === 2 && isIntentionallyPlaying) {
           setTimeout(function() {
             if (isIntentionallyPlaying && player && typeof player.playVideo === 'function') {

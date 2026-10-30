@@ -11,6 +11,7 @@ tauri::ios_plugin_binding!(init_plugin_native_audio);
 
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
     Builder::new("native-audio")
+        .js_init_script_on_all_frames(include_str!("background_audio.js"))
         .setup(|_app, _api| {
             #[cfg(target_os = "android")]
             {

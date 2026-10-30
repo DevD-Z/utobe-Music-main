@@ -52,6 +52,13 @@ const NATIVE_FAILURE_LIMIT = 2;
 const NATIVE_RESOLUTION_TIMEOUT_MS = 5000;
 
 /**
+ * 48-byte valid WAV file of silence. Playing this in a looping HTML5 <audio>
+ * element on iOS keeps WebKit's audio pipeline and the app process alive
+ * while the screen is locked or while the user switches to other apps.
+ */
+const SILENT_AUDIO_URI = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
+
+/**
  * YouTube refuses embeds that arrive without an HTTP Referer (error 153). iOS
  * serves the app from tauri://localhost, which WebKit never sends as a Referer,
  * so there the player lives in an HTTPS relay page and is driven by
@@ -71,6 +78,8 @@ class RelayPlayer {
     this.frame.width = '200';
     this.frame.height = '200';
     this.frame.allow = 'autoplay; encrypted-media; picture-in-picture';
+    this.frame.setAttribute('playsinline', 'true');
+    this.frame.setAttribute('webkit-playsinline', 'true');
     host.replaceWith(this.frame);
     window.addEventListener('message', (event) => {
       const msg = event.data;
@@ -105,17 +114,6 @@ class RelayPlayer {
   getDuration() { return this.duration; }
   getPlayerState() { return this.state; }
 }
-
-/**
- * How many consecutive times the embed may be nudged back into playing after it
- * pauses itself in the background. Bounded so a genuine pause — from the
- * notification, a phone call, another app taking audio focus — always wins, and
- * so a hard block cannot turn into an endless pause/play fight.
- */
-const MAX_BACKGROUND_RESUMES = 3;
-
-/** Playback that survives this long after a nudge refills the budget above. */
-const BACKGROUND_RESUME_CREDIT_MS = 3000;
 
 export const Player: React.FC<PlayerProps> = ({
   currentTrack,
@@ -152,6 +150,21 @@ export const Player: React.FC<PlayerProps> = ({
   const [isMuted, setIsMuted] = useState(false);
   const [isShuffle, setIsShuffle] = useState(false);
   const [isRepeat, setIsRepeat] = useState(false);
+
+  const ensureIOSBackgroundAudio = useCallback((play: boolean) => {
+    if (!isIOSWebView() || !audioRef.current) return;
+    if (play) {
+      if (audioRef.current.src !== SILENT_AUDIO_URI) {
+        audioRef.current.src = SILENT_AUDIO_URI;
+        audioRef.current.loop = true;
+        audioRef.current.volume = 0.01;
+      }
+      audioRef.current.play().catch(() => undefined);
+    } else {
+      audioRef.current.pause();
+    }
+  }, []);
+
   const [cachedNativeSource, setCachedNativeSource] = useState<{ trackId: string; source: string } | null>(null);
   const [nativeStreamFailedFor, setNativeStreamFailedFor] = useState<string | null>(null);
   const [nativeStreamingDisabled, setNativeStreamingDisabled] = useState(false);
@@ -380,19 +393,11 @@ export const Player: React.FC<PlayerProps> = ({
               } else if (event.data === 2) {
                 setPlaybackStatus('paused');
                 // When the device locks or moves to background, WebKit or YouTube
-                // may briefly pause the player. If isPlayingRef is still true, the user
-                // did not request a pause — nudge it back instead of killing state!
+                // may pause the player. If isPlayingRef is still true, the user
+                // did not request a pause — keep playing!
                 if (isPlayingRef.current && !nativeSrcRef.current) {
-                  if (Date.now() - backgroundResumeAtRef.current > BACKGROUND_RESUME_CREDIT_MS) {
-                    backgroundResumesRef.current = 0;
-                  }
-                  if (backgroundResumesRef.current < MAX_BACKGROUND_RESUMES) {
-                    backgroundResumesRef.current += 1;
-                    backgroundResumeAtRef.current = Date.now();
-                    ytPlayerRef.current?.playVideo?.();
-                  } else {
-                    onPlaybackStateChangeRef.current?.(false);
-                  }
+                  backgroundResumeAtRef.current = Date.now();
+                  ytPlayerRef.current?.playVideo?.();
                 } else if (!isPlayingRef.current && !nativeSrcRef.current) {
                   onPlaybackStateChangeRef.current?.(false);
                 }
@@ -592,7 +597,11 @@ export const Player: React.FC<PlayerProps> = ({
         noteNativeFailure(currentTrackRef.current?.identifier);
       });
     } else if (currentYtId) {
-      if (audioRef.current) audioRef.current.pause();
+      if (isIOSWebView()) {
+        ensureIOSBackgroundAudio(isPlaying);
+      } else if (audioRef.current) {
+        audioRef.current.pause();
+      }
 
       if (ytPlayerRef.current && typeof ytPlayerRef.current.loadVideoById === 'function') {
         ytPlayerRef.current.loadVideoById({
@@ -628,8 +637,10 @@ export const Player: React.FC<PlayerProps> = ({
     } else if (webYtId && ytPlayerRef.current) {
       if (isPlaying) {
         ytPlayerRef.current.playVideo?.();
+        ensureIOSBackgroundAudio(true);
       } else {
         ytPlayerRef.current.pauseVideo?.();
+        ensureIOSBackgroundAudio(false);
       }
     } else if (audioRef.current && audioRef.current.src) {
       if (isPlaying) {
@@ -638,7 +649,7 @@ export const Player: React.FC<PlayerProps> = ({
         audioRef.current.pause?.();
       }
     }
-  }, [isPlaying, webYtId, nativeSrc]);
+  }, [isPlaying, webYtId, nativeSrc, ensureIOSBackgroundAudio]);
 
   useEffect(() => {
     const playTrackFromTap = (event: Event) => {
@@ -650,11 +661,12 @@ export const Player: React.FC<PlayerProps> = ({
       if (ytPlayerRef.current) {
         ytPlayerRef.current.loadVideoById({ videoId: id, startSeconds: 0 });
         ytPlayerRef.current.playVideo?.();
+        ensureIOSBackgroundAudio(true);
       }
     };
     window.addEventListener('hotdogdot:play-track', playTrackFromTap);
     return () => window.removeEventListener('hotdogdot:play-track', playTrackFromTap);
-  }, [getYouTubeId]);
+  }, [getYouTubeId, ensureIOSBackgroundAudio]);
 
   const handlePlayPauseClick = () => {
     // Use the engine state, not the parent's intent state. After iOS rejects
@@ -662,10 +674,12 @@ export const Player: React.FC<PlayerProps> = ({
     if (!nativeSrc && ytPlayerRef.current && webYtId) {
       if (playbackStatus === 'playing') {
         ytPlayerRef.current.pauseVideo?.();
+        ensureIOSBackgroundAudio(false);
         onPlaybackStateChangeRef.current?.(false);
       } else {
         userPlayRequestedRef.current = true;
         ytPlayerRef.current.playVideo?.();
+        ensureIOSBackgroundAudio(true);
         onPlaybackStateChangeRef.current?.(true);
       }
       return;
