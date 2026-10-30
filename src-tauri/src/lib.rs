@@ -25,32 +25,50 @@ use tokio::sync::RwLock;
 /// cannot serve the video rejects in a fraction of a second, whereas letting the
 /// YouTube plugin walk its whole configured list takes upwards of 40s before it
 /// gives up — long enough to look like the app had simply frozen.
-const YOUTUBE_CLIENTS: [&str; 5] = ["MUSIC", "ANDROID_VR", "IOS", "TV", "WEB"];
+#[cfg(target_os = "ios")]
+const YOUTUBE_CLIENTS: [&str; 2] = ["TV", "IOS"];
+#[cfg(not(target_os = "ios"))]
+const YOUTUBE_CLIENTS: [&str; 4] = ["TV", "ANDROID_VR", "WEBEMBEDDED", "WEB"];
 
 /// Upper bound on how long one client may take to produce response headers.
 const CLIENT_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(9);
 
-/// Deadline for the up-front probe that picks a client. A node that cannot
-/// extract formats answers in well under this; measured worst case on the hosted
-/// node is 6.2s, and all clients are probed at once, so this bounds the whole
-/// resolution step rather than a single attempt.
-const CLIENT_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
+/// Deadline for the up-front probe that picks a client. All clients are probed
+/// concurrently, so this bounds the whole resolution step rather than a single
+/// attempt. The UI has a slightly longer guard as a second line of defense.
+const CLIENT_PROBE_TIMEOUT: Duration = Duration::from_secs(4);
 
 /// Tokens are kept around after the next song is prepared so range requests the
 /// player still has in flight for the current song keep resolving.
 const MAX_TRACKED_STREAMS: usize = 16;
 
-#[cfg(target_os = "ios")]
-const IOS_AUDIO_ITAG: &str = "140";
-
 fn stream_url(base_url: &str, video_id: &str, client_name: &str) -> String {
     #[cfg(target_os = "ios")]
-    return format!(
-        "{base_url}/youtube/stream/{video_id}?itag={IOS_AUDIO_ITAG}&withClient={client_name}"
-    );
+    return format!("{base_url}/youtube/stream/{video_id}?itag=140&withClient={client_name}");
 
     #[cfg(not(target_os = "ios"))]
     format!("{base_url}/youtube/stream/{video_id}?withClient={client_name}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stream_url;
+
+    #[test]
+    fn stream_url_uses_platform_format_policy() {
+        let url = stream_url("https://node.example", "dQw4w9WgXcQ", "TV");
+
+        #[cfg(target_os = "ios")]
+        assert_eq!(
+            url,
+            "https://node.example/youtube/stream/dQw4w9WgXcQ?itag=140&withClient=TV"
+        );
+        #[cfg(not(target_os = "ios"))]
+        assert_eq!(
+            url,
+            "https://node.example/youtube/stream/dQw4w9WgXcQ?withClient=TV"
+        );
+    }
 }
 
 #[derive(Clone)]

@@ -67,7 +67,7 @@ The optional `APPLE_DEVELOPMENT_TEAM` environment variable can be used by CI or 
 
 ## Native playback architecture
 
-YouTube tracks use a lazy Rust loopback proxy. The proxy starts only on first playback, keeps the Lavalink password inside Rust, requests the AAC-compatible `itag=140` stream for AVPlayer, and returns a short-lived `127.0.0.1` URL to the native player. `NSAllowsLocalNetworking` permits only that loopback handoff; remote traffic still requires HTTPS. The proxy is never required for app launch, so socket or network failure falls back to WebView playback instead of terminating the process.
+YouTube tracks use a lazy Rust loopback proxy. The proxy starts only on first playback, keeps the Lavalink password inside Rust, and uses the OAuth-capable TV or iOS client with AAC `itag=140` for AVPlayer. Other platforms let Lavalink choose an available format. The proxy returns a short-lived `127.0.0.1` URL to the native player. `NSAllowsLocalNetworking` permits only that loopback handoff; remote traffic still requires HTTPS. The proxy is never required for app launch, and stream-resolution failure falls back to WebView playback after five seconds instead of blocking the player.
 
 The custom XcodeGen template at `src-tauri/ios/project.yml` is authoritative. It embeds Swift standard libraries and adds `/usr/lib/swift` to `LD_RUNPATH_SEARCH_PATHS`, which is required by `tauri-plugin-native-audio` on an iOS 14 deployment target. Do not patch the generated `src-tauri/gen/apple/project.yml`; regenerate it with `npx tauri ios init --ci`.
 

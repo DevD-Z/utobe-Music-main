@@ -46,6 +46,12 @@ type PlaybackStatus = 'idle' | 'loading' | 'buffering' | 'playing' | 'paused' | 
 const NATIVE_FAILURE_LIMIT = 2;
 
 /**
+ * Native extraction is optional. Never leave the YouTube embed suppressed while
+ * Lavalink is unavailable or slow.
+ */
+const NATIVE_RESOLUTION_TIMEOUT_MS = 5000;
+
+/**
  * How many consecutive times the embed may be nudged back into playing after it
  * pauses itself in the background. Bounded so a genuine pause — from the
  * notification, a phone call, another app taking audio focus — always wins, and
@@ -192,21 +198,38 @@ export const Player: React.FC<PlayerProps> = ({
     setCurrentTime(0);
     setDuration(currentTrack.length ? currentTrack.length / 1000 : 0);
     setPlaybackStatus('loading');
-    void invoke<string>('prepare_lavalink_stream', {
-      videoId: ytId,
-      baseUrl: getLavalinkBaseUrl(config),
-      password: config.password,
-    }).then((source) => {
+    let timeoutId = 0;
+    let resolutionTimedOut = false;
+    const resolutionTimeout = new Promise<never>((_, reject) => {
+      timeoutId = window.setTimeout(() => {
+        resolutionTimedOut = true;
+        cancelled = true;
+        reject(new Error('Native YouTube stream resolution timed out'));
+      }, NATIVE_RESOLUTION_TIMEOUT_MS);
+    });
+    void Promise.race([
+      invoke<string>('prepare_lavalink_stream', {
+        videoId: ytId,
+        baseUrl: getLavalinkBaseUrl(config),
+        password: config.password,
+      }),
+      resolutionTimeout,
+    ]).then((source) => {
       if (!cancelled) {
         setNativeStreamFailedFor((failed) => failed === currentTrack.identifier ? null : failed);
         setCachedNativeSource({ trackId: currentTrack.identifier, source });
       }
     }).catch((error) => {
-      if (cancelled) return;
+      if (!resolutionTimedOut && cancelled) return;
       logger.addLog('warn', 'Player', `Native YouTube stream unavailable: ${String(error)}`);
       noteNativeFailure(currentTrack.identifier);
+    }).finally(() => {
+      window.clearTimeout(timeoutId);
     });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
   }, [currentTrack?.identifier, ytId, nativeStreamingDisabled]);
 
   // Resolve the next queued YouTube track ahead of time. This is especially
