@@ -359,6 +359,14 @@ export const Player: React.FC<PlayerProps> = ({
     if (!isNativeMobile()) return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
+    let unlistenRemote: (() => void) | undefined;
+
+    void nativeAudio.listenRemoteCommand((command) => {
+      if (command === 'next') onNextRef.current();
+      else onPreviousRef.current();
+    }).then((remove) => { unlistenRemote = remove; }).catch((error) => {
+      logger.addLog('warn', 'Player', `Native media-button listener unavailable: ${String(error)}`);
+    });
 
     void nativeAudio.listen((state) => {
       if (disposed || !nativeSrcRef.current) return;
@@ -406,6 +414,7 @@ export const Player: React.FC<PlayerProps> = ({
     return () => {
       disposed = true;
       unlisten?.();
+      unlistenRemote?.();
       document.removeEventListener('visibilitychange', reconcile);
     };
   }, []);

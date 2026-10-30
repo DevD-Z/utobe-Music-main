@@ -1,6 +1,5 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import App from "./App";
 import "./App.css";
 
 // Unregister any stale Service Worker and clear stale caches on desktop
@@ -58,10 +57,38 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
   }
 }
 
-ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <React.StrictMode>
-    <ErrorBoundary>
-      <App />
-    </ErrorBoundary>
-  </React.StrictMode>,
-);
+const rootElement = document.getElementById('root');
+
+function showBootstrapError(error: unknown) {
+  console.error('[BOOT] JavaScript startup failed:', error);
+  if (!rootElement) return;
+  const message = error instanceof Error ? error.message : String(error);
+  rootElement.innerHTML = '';
+  const panel = document.createElement('pre');
+  panel.style.cssText = 'box-sizing:border-box;margin:0;padding:30px;color:#fff;background:#090d16;min-height:100vh;white-space:pre-wrap;font-family:sans-serif';
+  panel.textContent = `เกิดข้อผิดพลาดก่อนโหลดแอป (Startup Error)\n\n${message}`;
+  rootElement.appendChild(panel);
+}
+
+window.addEventListener('error', (event) => {
+  if (!rootElement?.hasChildNodes()) showBootstrapError(event.error ?? event.message);
+});
+window.addEventListener('unhandledrejection', (event) => {
+  if (!rootElement?.hasChildNodes()) showBootstrapError(event.reason);
+});
+
+if (!rootElement) {
+  throw new Error('Missing #root element');
+}
+
+console.info('[BOOT] JavaScript entry');
+void import('./App').then(({ default: App }) => {
+  console.info('[BOOT] React mounting');
+  ReactDOM.createRoot(rootElement).render(
+    <React.StrictMode>
+      <ErrorBoundary>
+        <App />
+      </ErrorBoundary>
+    </React.StrictMode>,
+  );
+}).catch(showBootstrapError);

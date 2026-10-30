@@ -5,11 +5,11 @@ workflows:
     max_build_duration: 90
 
     environment:
-      node: 24.15.0
+      node: 22
       xcode: 26.4
       cocoapods: default
       vars:
-        APP_NAME: "hotdogdot"
+        APP_NAME: hotdogdot
 
     cache:
       cache_paths:
@@ -21,188 +21,111 @@ workflows:
     scripts:
       - name: Show build environment
         script: |
-          set -e
+          set -euo pipefail
           node --version
           npm --version
           xcodebuild -version
-          pod --version || true
+          pod --version
 
-      - name: Install JavaScript dependencies
+      - name: Install dependencies and validate frontend
         script: |
-          set -e
+          set -euo pipefail
           cd "$CM_BUILD_DIR"
           npm ci
+          npm run typecheck
+          npm run build
 
-      - name: Install Rust iOS targets
+      - name: Prepare Rust and iOS tools
         script: |
-          set -e
-          if [ -f "$HOME/.cargo/env" ]; then
-            source "$HOME/.cargo/env"
-          fi
-          export PATH="$HOME/.cargo/bin:$PATH"
+          set -euo pipefail
+          [ ! -f "$HOME/.cargo/env" ] || source "$HOME/.cargo/env"
+          export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+          export HOMEBREW_NO_AUTO_UPDATE=1
+          export HOMEBREW_NO_INSTALL_CLEANUP=1
 
           if ! command -v rustup >/dev/null 2>&1; then
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
             source "$HOME/.cargo/env"
           fi
-
           rustup default stable
-          rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+          rustup target add aarch64-apple-ios
+
+          for package in xcodegen libimobiledevice; do
+            if ! brew list --versions "$package" >/dev/null 2>&1; then
+              brew install "$package"
+            fi
+            brew link --overwrite --force "$package" >/dev/null 2>&1 || true
+          done
+          hash -r
+
           rustc --version
           cargo --version
-
-      - name: Typecheck and build frontend
-        script: |
-          set -e
-          cd "$CM_BUILD_DIR"
-          npm run build
-
-      - name: Prepare iOS native tools
-        script: |
-          set -e
-          export HOMEBREW_NO_AUTO_UPDATE=1
-          export HOMEBREW_NO_INSTALL_CLEANUP=1
-          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
-
-          if ! command -v idevicesyslog >/dev/null 2>&1; then
-            if brew list --versions libimobiledevice >/dev/null 2>&1; then
-              brew link --overwrite --force libimobiledevice || true
-              hash -r
-            fi
-          fi
-
-          if ! command -v idevicesyslog >/dev/null 2>&1; then
-            brew install libimobiledevice
-            brew link --overwrite --force libimobiledevice || true
-            hash -r
-          fi
-
-          if ! command -v xcodegen >/dev/null 2>&1; then
-            if brew list --versions xcodegen >/dev/null 2>&1; then
-              brew link --overwrite --force xcodegen || true
-              hash -r
-            fi
-          fi
-
-          if ! command -v xcodegen >/dev/null 2>&1; then
-            brew install xcodegen
-            hash -r
-          fi
-
-          command -v idevicesyslog
-          command -v idevice_id
           command -v xcodegen
-          command -v pod
+          command -v idevice_id
           xcodegen --version
-          pod --version
 
       - name: Generate Tauri iOS project
         script: |
-          set -e
-          if [ -f "$HOME/.cargo/env" ]; then
-            source "$HOME/.cargo/env"
-          fi
+          set -euo pipefail
+          [ ! -f "$HOME/.cargo/env" ] || source "$HOME/.cargo/env"
           export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
-          export HOMEBREW_NO_AUTO_UPDATE=1
-          export HOMEBREW_NO_INSTALL_CLEANUP=1
-
           cd "$CM_BUILD_DIR"
-          cargo --version
-          rustc --version
-          command -v idevicesyslog
-          command -v idevice_id
-          command -v xcodegen
 
           rm -rf src-tauri/gen/apple
           npx tauri ios init --ci
-          test -d src-tauri/gen/apple
 
-          PROJECT_YML="$CM_BUILD_DIR/src-tauri/gen/apple/project.yml"
-          if [ -f "$PROJECT_YML" ]; then
-            export PROJECT_YML
-            python3 <<'PY'
-          from pathlib import Path
-          import os
-          import re
+          PROJECT_YML="src-tauri/gen/apple/project.yml"
+          test -f "$PROJECT_YML"
+          grep -Fq 'LD_RUNPATH_SEARCH_PATHS: [$(inherited), "@executable_path/Frameworks", /usr/lib/swift]' "$PROJECT_YML"
+          grep -Fq 'ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES: true' "$PROJECT_YML"
+          grep -Fq 'SWIFT_VERSION: 5.9' "$PROJECT_YML"
+          find src-tauri/gen/apple -maxdepth 2 -type d -name '*.xcodeproj' -print -quit | grep -q .
 
-          path = Path(os.environ["PROJECT_YML"])
-          text = path.read_text()
-
-          if "/usr/lib/swift" not in text:
-              pattern = r'(?m)^(\s*)-\s*"?@executable_path/Frameworks"?\s*$'
-              text, count = re.subn(
-                  pattern,
-                  lambda match: match.group(0) + '\n' + match.group(1) + '- "/usr/lib/swift"',
-                  text,
-                  count=1,
-              )
-              if count == 0:
-                  raise SystemExit("Could not locate LD_RUNPATH_SEARCH_PATHS entry in project.yml")
-              path.write_text(text)
-          PY
-
-            grep -q "/usr/lib/swift" "$PROJECT_YML"
-            grep -n -A4 -B2 "LD_RUNPATH_SEARCH_PATHS" "$PROJECT_YML" || true
-          fi
-
-          find src-tauri/gen/apple -maxdepth 2 -type d -name "*.xcodeproj" -print
-
-      - name: Build unsigned iOS app with Tauri
+      - name: Build unsigned Release IPA with Tauri
         script: |
           set -euo pipefail
-          if [ -f "$HOME/.cargo/env" ]; then
-            source "$HOME/.cargo/env"
-          fi
+          [ ! -f "$HOME/.cargo/env" ] || source "$HOME/.cargo/env"
           export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
           export CI=true
-          export HOMEBREW_NO_AUTO_UPDATE=1
-          export HOMEBREW_NO_INSTALL_CLEANUP=1
-
           cd "$CM_BUILD_DIR"
-          npx tauri ios build --ci --target aarch64 --no-sign -v
+
+          npx tauri ios build --ci --target aarch64 --no-sign -v 2>&1 | tee build-ios.log
+          grep -Eq -- '--configuration[ =]release|CONFIGURATION=release' build-ios.log
+          if grep -Eq 'CONFIGURATION=debug|--configuration[ =]debug|SWIFT_OPTIMIZATION_LEVEL=-Onone' build-ios.log; then
+            echo 'ERROR: production IPA was built with debug settings' >&2
+            exit 1
+          fi
 
       - name: Collect unsigned IPA
         script: |
           set -euo pipefail
           cd "$CM_BUILD_DIR"
-
           IPA_DIR="$CM_BUILD_DIR/build/ios/ipa"
           mkdir -p "$IPA_DIR"
 
-          FOUND_IPA="$(find "$CM_BUILD_DIR/src-tauri/gen/apple" -type f -name '*.ipa' -print -quit || true)"
-
-          if [ -n "$FOUND_IPA" ] && [ -f "$FOUND_IPA" ]; then
-            cp "$FOUND_IPA" "$IPA_DIR/$APP_NAME-unsigned.ipa"
-          else
-            APP_PATH="$(find "$CM_BUILD_DIR/src-tauri/gen/apple" "$CM_BUILD_DIR/src-tauri/target" \
-              -type d -name '*.app' -path '*iphoneos*' -print -quit 2>/dev/null || true)"
-
-            if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
-              APP_PATH="$(find "$CM_BUILD_DIR/src-tauri/gen/apple" \
-                -type d -name '*.app' -print -quit 2>/dev/null || true)"
-            fi
-
-            if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
-              echo "ERROR: No unsigned IPA or iPhone .app was produced."
-              find "$CM_BUILD_DIR/src-tauri/gen/apple" -maxdepth 6 \
-                \( -name '*.ipa' -o -name '*.app' -o -name '*.xcarchive' \) -print || true
-              exit 1
-            fi
-
-            TMP_PAYLOAD="$IPA_DIR/Payload"
-            rm -rf "$TMP_PAYLOAD"
-            mkdir -p "$TMP_PAYLOAD"
-            cp -R "$APP_PATH" "$TMP_PAYLOAD/"
-
-            cd "$IPA_DIR"
-            /usr/bin/zip -qry "$APP_NAME-unsigned.ipa" Payload
-            rm -rf Payload
+          FOUND_IPA="$(find src-tauri/target src-tauri/gen/apple -type f -name '*.ipa' -print -quit 2>/dev/null || true)"
+          if [ -z "$FOUND_IPA" ]; then
+            echo 'ERROR: Tauri did not produce an unsigned IPA.' >&2
+            find src-tauri/target src-tauri/gen/apple -maxdepth 8 \( -name '*.ipa' -o -name '*.app' -o -name '*.xcarchive' \) -print 2>/dev/null || true
+            exit 1
           fi
 
-          echo "Unsigned IPA ready:"
-          ls -lh "$IPA_DIR/$APP_NAME-unsigned.ipa"
+          OUTPUT_IPA="$IPA_DIR/$APP_NAME-unsigned.ipa"
+          cp "$FOUND_IPA" "$OUTPUT_IPA"
+          unzip -l "$OUTPUT_IPA" | grep -q 'Payload/.*\.app/'
+
+          VERIFY_DIR="$(mktemp -d)"
+          trap 'rm -rf "$VERIFY_DIR"' EXIT
+          unzip -q "$OUTPUT_IPA" -d "$VERIFY_DIR"
+          APP_PATH="$(find "$VERIFY_DIR/Payload" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          test -n "$APP_PATH"
+          EXECUTABLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP_PATH/Info.plist")"
+          /usr/bin/otool -l "$APP_PATH/$EXECUTABLE" | grep -A2 LC_RPATH | grep -Fq '/usr/lib/swift'
+          /usr/libexec/PlistBuddy -c 'Print :UIBackgroundModes' "$APP_PATH/Info.plist" | grep -q audio
+          test "$(/usr/libexec/PlistBuddy -c 'Print :DTXcodeBuild' "$APP_PATH/Info.plist")" != ""
+          ls -lh "$OUTPUT_IPA"
 
     artifacts:
       - build/ios/ipa/*.ipa
+      - build-ios.log
       - src-tauri/gen/apple/**/*.xcarchive
-      - src-tauri/gen/apple/**/*.app

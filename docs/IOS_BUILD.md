@@ -65,6 +65,10 @@ Test play, pause, seek, next/previous, interruption recovery, Bluetooth/headphon
 
 The optional `APPLE_DEVELOPMENT_TEAM` environment variable can be used by CI or Tauri tooling, but the Team can also be selected directly in Xcode. Never commit certificates, private keys, provisioning profiles, or App Store Connect API private keys.
 
-## Playback limitation
+## Native playback architecture
 
-Native background playback requires a directly playable URL or local file (`track.playbackUrl` or a non-YouTube `track.uri`). Lavalink's authenticated YouTube stream route requires an `Authorization` header, while the native player accepts a URL rather than arbitrary secret headers. Therefore YouTube iframe tracks intentionally remain on the WebView player and background continuity is not guaranteed for those tracks. For production YouTube background playback, issue short-lived signed media URLs from a trusted backend; do not embed the Lavalink password in the app.
+YouTube tracks use a lazy Rust loopback proxy. The proxy starts only on first playback, keeps the Lavalink password inside Rust, requests the AAC-compatible `itag=140` stream for AVPlayer, and returns a short-lived `127.0.0.1` URL to the native player. `NSAllowsLocalNetworking` permits only that loopback handoff; remote traffic still requires HTTPS. The proxy is never required for app launch, so socket or network failure falls back to WebView playback instead of terminating the process.
+
+The custom XcodeGen template at `src-tauri/ios/project.yml` is authoritative. It embeds Swift standard libraries and adds `/usr/lib/swift` to `LD_RUNPATH_SEARCH_PATHS`, which is required by `tauri-plugin-native-audio` on an iOS 14 deployment target. Do not patch the generated `src-tauri/gen/apple/project.yml`; regenerate it with `npx tauri ios init --ci`.
+
+For launch diagnostics, capture the device console and filter for `[BOOT]`. Expected order: Rust entry, plugin registration, setup callback, WebView ready, JavaScript entry, React mounting.

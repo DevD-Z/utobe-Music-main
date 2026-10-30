@@ -17,7 +17,8 @@
         "height": 800,
         "minWidth": 900,
         "minHeight": 600,
-        "useHttpsScheme": true
+        "useHttpsScheme": true,
+        "backgroundThrottling": "disabled"
       }
     ],
     "security": {
@@ -29,7 +30,8 @@
     "targets": "all",
     "iOS": {
       "minimumSystemVersion": "14.0",
-      "infoPlist": "Info.ios.plist"
+      "infoPlist": "Info.ios.plist",
+      "template": "src-tauri/ios/project.yml"
     },
     "android": {
       "minSdkVersion": 26

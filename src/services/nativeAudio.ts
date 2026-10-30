@@ -1,7 +1,7 @@
 import type { Track } from '../types/music';
 import type { NativeAudioState } from 'tauri-plugin-native-audio-api';
 import * as nativeAudioApi from 'tauri-plugin-native-audio-api';
-import { isTauri } from '@tauri-apps/api/core';
+import { addPluginListener, isTauri } from '@tauri-apps/api/core';
 import { logger } from './logger';
 
 const isTauriRuntime = (): boolean =>
@@ -117,5 +117,18 @@ export const nativeAudio = {
       if (typeof listener === 'function') return listener();
       return listener.unregister();
     };
+  },
+  listenRemoteCommand: async (handler: (command: 'next' | 'previous') => void) => {
+    await initialize();
+    const listener = await addPluginListener<{ command?: string }>(
+      'native-audio',
+      'native_audio_remote_command',
+      (payload) => {
+        if (payload.command === 'next' || payload.command === 'previous') {
+          handler(payload.command);
+        }
+      },
+    );
+    return () => listener.unregister();
   },
 };
