@@ -88,6 +88,8 @@ export const Player: React.FC<PlayerProps> = ({
   const [ytReady, setYtReady] = useState(false);
 
   const [playbackStatus, setPlaybackStatus] = useState<PlaybackStatus>('idle');
+  const [playerError, setPlayerError] = useState<string | null>(null);
+  useEffect(() => { setPlayerError(null); }, [currentTrack?.identifier]);
 
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -364,6 +366,7 @@ export const Player: React.FC<PlayerProps> = ({
             },
             onError: (event: any) => {
               logger.addLog('error', 'Player', `YouTube Player Error Code: ${event.data}`);
+              setPlayerError(`YouTube error ${event.data}`);
               setPlaybackStatus('error');
               onPlaybackStateChangeRef.current?.(false);
             },
@@ -854,8 +857,8 @@ export const Player: React.FC<PlayerProps> = ({
                   {currentTrack.title}
                 </h4>
               )}
-              <p className="text-xs text-slate-400 truncate">
-                {currentTrack.author}
+              <p className={`text-xs truncate ${playerError ? 'text-rose-400' : 'text-slate-400'}`}>
+                {playerError ?? currentTrack.author}
               </p>
             </div>
           </>
