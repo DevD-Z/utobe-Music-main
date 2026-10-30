@@ -84,6 +84,7 @@ export const Player: React.FC<PlayerProps> = ({
   const ytPlayerRef = useRef<any>(null);
   const ytHostRef = useRef<HTMLDivElement | null>(null);
   const userPlayRequestedRef = useRef(false);
+  const pendingYouTubePlayRef = useRef<string | null>(null);
   const [ytReady, setYtReady] = useState(false);
 
   const [playbackStatus, setPlaybackStatus] = useState<PlaybackStatus>('idle');
@@ -303,10 +304,14 @@ export const Player: React.FC<PlayerProps> = ({
           events: {
             onReady: () => {
               const iframe = ytHostRef.current?.querySelector('iframe');
-              iframe?.setAttribute('allow', 'autoplay; encrypted-media; picture-in-picture');
+              if (iframe) iframe.setAttribute('allow', 'autoplay; encrypted-media; picture-in-picture');
               logger.addLog('success', 'Player', 'YouTube Player Engine Ready!');
               setYtReady(true);
-              if (isPlayingRef.current && !nativeSrcRef.current) {
+              const pendingId = pendingYouTubePlayRef.current;
+              if (pendingId) {
+                ytPlayerRef.current?.loadVideoById({ videoId: pendingId, startSeconds: 0 });
+                ytPlayerRef.current?.playVideo?.();
+              } else if (isPlayingRef.current && !nativeSrcRef.current) {
                 ytPlayerRef.current?.playVideo?.();
               }
             },
@@ -592,10 +597,13 @@ export const Player: React.FC<PlayerProps> = ({
     const playTrackFromTap = (event: Event) => {
       const track = (event as CustomEvent<Track>).detail;
       const id = getYouTubeId(track);
-      if (!id || !ytPlayerRef.current) return;
+      if (!id) return;
       userPlayRequestedRef.current = true;
-      ytPlayerRef.current.loadVideoById({ videoId: id, startSeconds: 0 });
-      ytPlayerRef.current.playVideo?.();
+      pendingYouTubePlayRef.current = id;
+      if (ytPlayerRef.current) {
+        ytPlayerRef.current.loadVideoById({ videoId: id, startSeconds: 0 });
+        ytPlayerRef.current.playVideo?.();
+      }
     };
     window.addEventListener('hotdogdot:play-track', playTrackFromTap);
     return () => window.removeEventListener('hotdogdot:play-track', playTrackFromTap);
@@ -804,7 +812,7 @@ export const Player: React.FC<PlayerProps> = ({
       <div
         aria-hidden="true"
         className="fixed w-[200px] h-[200px] opacity-[0.01] pointer-events-none overflow-hidden"
-        style={{ left: 0, top: '-240px' }}
+        style={{ left: '-1px', top: '-1px' }}
       >
         <div ref={ytHostRef} id="yt-player-iframe-element" />
       </div>
