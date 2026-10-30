@@ -307,8 +307,13 @@ export const Player: React.FC<PlayerProps> = ({
             onStateChange: (event: any) => {
               if (event.data === 1) {
                 setPlaybackStatus('playing');
+                if (!nativeSrcRef.current) onPlaybackStateChangeRef.current?.(true);
               } else if (event.data === 2) {
                 setPlaybackStatus('paused');
+                // iOS may reject autoplay until the user taps Play. Keep the
+                // parent state honest so the next tap calls playVideo(), not
+                // pauseVideo() against an already-paused iframe.
+                if (!nativeSrcRef.current) onPlaybackStateChangeRef.current?.(false);
                 // Chromium suspends the embed on screen-off and on audio-focus
                 // loss. `isPlayingRef` is still true then — a real pause flips it
                 // first — so a bounded nudge only ever fights the machine.

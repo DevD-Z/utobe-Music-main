@@ -24,7 +24,7 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
   onClose,
 }) => {
   return (
-    <div className="fixed inset-y-0 right-0 z-[60] w-full sm:w-80 bg-slate-900/95 border-l border-slate-800 backdrop-blur-xl shadow-2xl p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] flex flex-col justify-between animate-drawer-enter">
+    <div className="fixed inset-y-0 right-0 z-[100] w-full sm:w-80 bg-slate-900/95 border-l border-slate-800 backdrop-blur-xl shadow-2xl pt-[calc(1rem+env(safe-area-inset-top))] px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] flex flex-col justify-between animate-drawer-enter">
       <div className="space-y-4 flex-1 overflow-hidden flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-slate-800 pb-3">
