@@ -89,12 +89,16 @@ workflows:
           export CI=true
           cd "$CM_BUILD_DIR"
 
-          npx tauri ios build --ci --target aarch64 --no-sign -v 2>&1 | tee build-ios.log
-          grep -Eq -- '--configuration[ =]release|CONFIGURATION=release' build-ios.log
-          if grep -Eq 'CONFIGURATION=debug|--configuration[ =]debug|SWIFT_OPTIMIZATION_LEVEL=-Onone' build-ios.log; then
-            echo 'ERROR: production IPA was built with debug settings' >&2
+          PROJECT="$(find src-tauri/gen/apple -maxdepth 2 -type d -name '*.xcodeproj' -print -quit)"
+          test -n "$PROJECT"
+          RELEASE_SETTINGS="$(xcodebuild -project "$PROJECT" -scheme hotdogdot_iOS -configuration release -showBuildSettings)"
+          grep -Fq 'CONFIGURATION = release' <<<"$RELEASE_SETTINGS"
+          if grep -Fq 'SWIFT_OPTIMIZATION_LEVEL = -Onone' <<<"$RELEASE_SETTINGS"; then
+            echo 'ERROR: release configuration uses debug Swift optimization' >&2
             exit 1
           fi
+
+          npx tauri ios build --ci --target aarch64 --no-sign -v 2>&1 | tee build-ios.log
 
       - name: Collect unsigned IPA
         script: |
