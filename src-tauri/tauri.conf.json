@@ -18,8 +18,7 @@
         "minWidth": 900,
         "minHeight": 600,
         "useHttpsScheme": true,
-        "backgroundThrottling": "disabled",
-        "autoplay": true
+        "backgroundThrottling": "disabled"
       }
     ],
     "security": {
