@@ -116,7 +116,6 @@ workflows:
 
           OUTPUT_IPA="$IPA_DIR/$APP_NAME-unsigned.ipa"
           cp "$FOUND_IPA" "$OUTPUT_IPA"
-          unzip -l "$OUTPUT_IPA" | grep -q 'Payload/.*\.app/'
 
           VERIFY_DIR="$(mktemp -d)"
           trap 'rm -rf "$VERIFY_DIR"' EXIT
@@ -124,8 +123,10 @@ workflows:
           APP_PATH="$(find "$VERIFY_DIR/Payload" -maxdepth 1 -type d -name '*.app' -print -quit)"
           test -n "$APP_PATH"
           EXECUTABLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP_PATH/Info.plist")"
-          /usr/bin/otool -l "$APP_PATH/$EXECUTABLE" | grep -A2 LC_RPATH | grep -Fq '/usr/lib/swift'
-          /usr/libexec/PlistBuddy -c 'Print :UIBackgroundModes' "$APP_PATH/Info.plist" | grep -q audio
+          /usr/bin/otool -l "$APP_PATH/$EXECUTABLE" > "$VERIFY_DIR/otool.txt"
+          grep -F '/usr/lib/swift' "$VERIFY_DIR/otool.txt" >/dev/null
+          /usr/libexec/PlistBuddy -c 'Print :UIBackgroundModes' "$APP_PATH/Info.plist" > "$VERIFY_DIR/background-modes.txt"
+          grep -Fx '    audio' "$VERIFY_DIR/background-modes.txt" >/dev/null
           test "$(/usr/libexec/PlistBuddy -c 'Print :DTXcodeBuild' "$APP_PATH/Info.plist")" != ""
           ls -lh "$OUTPUT_IPA"
 

@@ -345,7 +345,7 @@ export const Player: React.FC<PlayerProps> = ({
             onError: (event: any) => {
               logger.addLog('error', 'Player', `YouTube Player Error Code: ${event.data}`);
               setPlaybackStatus('error');
-              setTimeout(() => onNextRef.current(), 2000);
+              onPlaybackStateChangeRef.current?.(false);
             },
           },
         });
