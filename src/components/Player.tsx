@@ -285,8 +285,8 @@ export const Player: React.FC<PlayerProps> = ({
       try {
         ytPlayerRef.current = new window.YT.Player(ytHostRef.current, {
           host: 'https://www.youtube-nocookie.com',
-          width: '2',
-          height: '2',
+          width: '200',
+          height: '200',
           playerVars: {
             enablejsapi: 1,
             autoplay: 1,
