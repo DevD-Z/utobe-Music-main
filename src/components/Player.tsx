@@ -610,14 +610,18 @@ export const Player: React.FC<PlayerProps> = ({
   }, [getYouTubeId]);
 
   const handlePlayPauseClick = () => {
-    // Keep YouTube's play command inside the native tap. React state effects run
-    // after the event and iOS WKWebView may reject that delayed autoplay.
+    // Use the engine state, not the parent's intent state. After iOS rejects
+    // autoplay, `isPlaying` can remain true while the iframe is actually paused.
     if (!nativeSrc && ytPlayerRef.current && webYtId) {
-      if (isPlayingRef.current) ytPlayerRef.current.pauseVideo?.();
-      else {
+      if (playbackStatus === 'playing') {
+        ytPlayerRef.current.pauseVideo?.();
+        onPlaybackStateChangeRef.current?.(false);
+      } else {
         userPlayRequestedRef.current = true;
         ytPlayerRef.current.playVideo?.();
+        onPlaybackStateChangeRef.current?.(true);
       }
+      return;
     }
     onPlayPauseToggle();
   };
