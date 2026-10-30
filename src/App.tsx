@@ -169,6 +169,7 @@ export function App() {
   const handlePlayTrack = (track: Track, fromQueue: boolean = false) => {
     currentTrackIdRef.current = track.identifier;
     logger.addLog('info', 'System', `User selected track to play: "${track.title}" (${track.author})`);
+    window.dispatchEvent(new CustomEvent('hotdogdot:play-track', { detail: track }));
     setCurrentTrack(track);
     setIsPlaying(true);
 

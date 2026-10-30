@@ -83,6 +83,7 @@ export const Player: React.FC<PlayerProps> = ({
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const ytPlayerRef = useRef<any>(null);
   const ytHostRef = useRef<HTMLDivElement | null>(null);
+  const userPlayRequestedRef = useRef(false);
   const [ytReady, setYtReady] = useState(false);
 
   const [playbackStatus, setPlaybackStatus] = useState<PlaybackStatus>('idle');
@@ -587,12 +588,28 @@ export const Player: React.FC<PlayerProps> = ({
     }
   }, [isPlaying, webYtId, nativeSrc]);
 
+  useEffect(() => {
+    const playTrackFromTap = (event: Event) => {
+      const track = (event as CustomEvent<Track>).detail;
+      const id = getYouTubeId(track);
+      if (!id || !ytPlayerRef.current) return;
+      userPlayRequestedRef.current = true;
+      ytPlayerRef.current.loadVideoById({ videoId: id, startSeconds: 0 });
+      ytPlayerRef.current.playVideo?.();
+    };
+    window.addEventListener('hotdogdot:play-track', playTrackFromTap);
+    return () => window.removeEventListener('hotdogdot:play-track', playTrackFromTap);
+  }, [getYouTubeId]);
+
   const handlePlayPauseClick = () => {
     // Keep YouTube's play command inside the native tap. React state effects run
     // after the event and iOS WKWebView may reject that delayed autoplay.
     if (!nativeSrc && ytPlayerRef.current && webYtId) {
       if (isPlayingRef.current) ytPlayerRef.current.pauseVideo?.();
-      else ytPlayerRef.current.playVideo?.();
+      else {
+        userPlayRequestedRef.current = true;
+        ytPlayerRef.current.playVideo?.();
+      }
     }
     onPlayPauseToggle();
   };
