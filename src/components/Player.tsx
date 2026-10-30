@@ -379,34 +379,22 @@ export const Player: React.FC<PlayerProps> = ({
                 if (!nativeSrcRef.current) onPlaybackStateChangeRef.current?.(true);
               } else if (event.data === 2) {
                 setPlaybackStatus('paused');
-                // iOS may reject autoplay until the user taps Play. Keep the
-                // parent state honest so the next tap calls playVideo(), not
-                // pauseVideo() against an already-paused iframe.
-                if (!nativeSrcRef.current) onPlaybackStateChangeRef.current?.(false);
-                // Chromium suspends the embed on screen-off and on audio-focus
-                // loss. `isPlayingRef` is still true then — a real pause flips it
-                // first — so a bounded nudge only ever fights the machine.
-                // Gating this on a hidden document used to work, but the activity
-                // now reports the WebView as visible so background audio survives
-                // at all, which made that condition permanently false.
-                //
-                // A nudge whose playback then held for a while was not a futile
-                // fight, so it earns a fresh budget. Measured on CPH1937: one
-                // locked screen needed two recoveries in the first 13s and the
-                // second one carried 90s of audio, so a flat per-track budget of
-                // three would have run out part-way through a normal session.
-                if (Date.now() - backgroundResumeAtRef.current > BACKGROUND_RESUME_CREDIT_MS) {
-                  backgroundResumesRef.current = 0;
-                }
-                if (
-                  isAndroidWebView()
-                  && isPlayingRef.current
-                  && !nativeSrcRef.current
-                  && backgroundResumesRef.current < MAX_BACKGROUND_RESUMES
-                ) {
-                  backgroundResumesRef.current += 1;
-                  backgroundResumeAtRef.current = Date.now();
-                  ytPlayerRef.current?.playVideo?.();
+                // When the device locks or moves to background, WebKit or YouTube
+                // may briefly pause the player. If isPlayingRef is still true, the user
+                // did not request a pause — nudge it back instead of killing state!
+                if (isPlayingRef.current && !nativeSrcRef.current) {
+                  if (Date.now() - backgroundResumeAtRef.current > BACKGROUND_RESUME_CREDIT_MS) {
+                    backgroundResumesRef.current = 0;
+                  }
+                  if (backgroundResumesRef.current < MAX_BACKGROUND_RESUMES) {
+                    backgroundResumesRef.current += 1;
+                    backgroundResumeAtRef.current = Date.now();
+                    ytPlayerRef.current?.playVideo?.();
+                  } else {
+                    onPlaybackStateChangeRef.current?.(false);
+                  }
+                } else if (!isPlayingRef.current && !nativeSrcRef.current) {
+                  onPlaybackStateChangeRef.current?.(false);
                 }
               } else if (event.data === 3) {
                 setPlaybackStatus('buffering');

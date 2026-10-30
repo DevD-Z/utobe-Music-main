@@ -44,6 +44,7 @@ actor PlaybackRuntimeActor {
   func initialize() async throws -> NativeAudioState {
     ensureConfigured()
     try audioSessionController.configurePlaybackCategory()
+    try audioSessionController.setActive(true)
     emitState(trigger: .transition, forcePersistCheckpoint: false, forceEmit: true, refreshArtwork: false)
     return snapshot()
   }
