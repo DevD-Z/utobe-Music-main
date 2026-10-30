@@ -301,8 +301,13 @@ export const Player: React.FC<PlayerProps> = ({
           },
           events: {
             onReady: () => {
+              const iframe = ytHostRef.current?.querySelector('iframe');
+              iframe?.setAttribute('allow', 'autoplay; encrypted-media; picture-in-picture');
               logger.addLog('success', 'Player', 'YouTube Player Engine Ready!');
               setYtReady(true);
+              if (isPlayingRef.current && !nativeSrcRef.current) {
+                ytPlayerRef.current?.playVideo?.();
+              }
             },
             onStateChange: (event: any) => {
               if (event.data === 1) {
@@ -782,7 +787,7 @@ export const Player: React.FC<PlayerProps> = ({
       <div
         aria-hidden="true"
         className="fixed w-[200px] h-[200px] opacity-[0.01] pointer-events-none overflow-hidden"
-        style={{ left: '-300px', top: 0 }}
+        style={{ left: 0, top: '-240px' }}
       >
         <div ref={ytHostRef} id="yt-player-iframe-element" />
       </div>
